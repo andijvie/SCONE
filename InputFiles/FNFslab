@@ -1,0 +1,100 @@
+type eigenPhysicsPackage;
+
+pop      2000;
+active   1;
+inactive 1000;
+XSdata   mg;
+dataType mg;
+outputFormat asciiJSON;
+outputFile popRed;
+
+collisionOperator { neutronMG {type neutronMGstd;}
+                  }
+
+transportOperator { type transportOperatorDT;
+                  }
+inactiveTally {
+                shannon_entropy { type shannonEntropyClerk;
+                map { type spaceMap; axis x; grid lin; min -205.0; max 205.0; N 2;}
+                cycles 1000; }
+		
+		flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
+                map { type spaceMap; axis x; grid lin; min -205.0; max 205.0; N 100; } cycles 1000; }
+              }
+
+activeTally  {
+                
+        }
+
+viz {
+     plotFNF { type bmp; axis y; centre (0.0 0.0 0.0); res (200 200); output FNFgeom; }
+}
+
+geometry {
+    type geometryStd;
+    boundary (1 1 2 2 2 2);
+    graph {type shrunk;}
+
+    surfaces
+    {
+      absorbBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (200.0 20.0 20.0); }
+      fissileBox { id 2; type box; origin ( 0.0  0.0  0.0); halfwidth (205.0 2.0 2.0); }
+    }
+
+
+    cells
+    {
+      absorbCell { id 1; type simpleCell; surfaces (-1); filltype mat; material absorbMat; }
+      fissileCell { id 2; type unionCell; surfaces [-2 1]; filltype mat; material fissileMat; }
+    }
+
+    universes
+    {
+      slab
+      {
+          id 2;
+          type cellUniverse; cells (1 2); 
+          checkOverlap 1;
+      }
+
+      root
+      {
+          id 1;
+          type rootUniverse;
+          border 2;
+          fill u<2>;
+      }
+    }
+}
+
+nuclearData {
+
+  handles {
+     mg { type baseMgNeutronDatabase; PN P0;}
+  }
+
+
+materials {
+
+    absorbMat {
+      temp       273;
+      composition {
+      }
+      xsFile ./XS/absorb_XSS;
+      rgb (200 0 0);
+    }
+    fissileMat {
+      temp       273;
+      composition {
+      }
+      xsFile ./XS/fissile_XSS;
+      rgb (0 0 200);
+    }
+
+}
+
+
+}
+
+
+

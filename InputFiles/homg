@@ -1,0 +1,83 @@
+type eigenPhysicsPackage;
+
+pop      100000;
+active   1;
+inactive 1000;
+XSdata   mg;
+dataType mg;
+outputFormat asciiJSON;
+outputFile popRed;
+
+collisionOperator { neutronMG {type neutronMGstd;}
+                  }
+
+transportOperator { type transportOperatorDT;
+                  }
+inactiveTally {
+                shannon_entropy { type shannonEntropyClerk;
+                map { type spaceMap; axis x; grid lin; min -5.0; max 5.0; N 10;}
+                cycles 1000; }
+		
+		flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
+                map { type spaceMap; axis x; grid lin; min -5.0; max 5.0; N 100; } cycles 1000; }
+              }
+
+activeTally  {
+                
+        }
+
+viz {
+     plotFNF { type bmp; axis y; centre (0.0 0.0 0.0); res (200 200); output FNFgeom; }
+}
+
+geometry {
+    type geometryStd;
+    boundary (2 2 2 2 2 2);
+    graph {type shrunk;}
+
+    surfaces
+    {
+      homgBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (5.0 2.0 2.0); }
+    }
+
+    cells
+    {
+    }
+
+    universes
+    {
+
+      root
+      {
+          id 1;
+          type rootUniverse;
+          border 1;
+          fill homgMat;
+      }
+    }
+}
+
+nuclearData {
+
+  handles {
+     mg { type baseMgNeutronDatabase; PN P0;}
+  }
+
+
+materials {
+
+    homgMat {
+      temp       273;
+      composition {
+      }
+      xsFile ./XS/homg_XSS;
+      rgb (200 0 0);
+    }
+
+}
+
+
+}
+
+
+

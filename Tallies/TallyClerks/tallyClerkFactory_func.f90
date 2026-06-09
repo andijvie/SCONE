@@ -11,6 +11,7 @@ module tallyClerkFactory_func
   use keffAnalogClerk_class,           only : keffAnalogClerk
   use keffImplicitClerk_class,         only : keffImplicitClerk
   use collisionClerk_class,            only : collisionClerk
+  use collisionClerkCycle_class,       only : collisionClerkCycle
   use collisionProbabilityClerk_class, only : collisionProbabilityClerk
   use trackClerk_class,                only : trackClerk
   use simpleFMClerk_class,             only : simpleFMClerk
@@ -34,6 +35,7 @@ module tallyClerkFactory_func
   character(nameLen),dimension(*),parameter :: AVALIBLE_tallyClerks = [ 'keffAnalogClerk          ',&
                                                                         'keffImplicitClerk        ',&
                                                                         'collisionClerk           ',&
+                                                                        'collisionClerkCycle      ',&
                                                                         'collisionProbabilityClerk',&
                                                                         'trackClerk               ',&
                                                                         'simpleFMClerk            ',&
@@ -74,6 +76,9 @@ contains
 
      case('collisionClerk')
        allocate(collisionClerk :: new)
+
+     case('collisionClerkCycle')
+       allocate(collisionClerkCycle :: new)
 
      case('collisionProbabilityClerk')
        allocate(collisionProbabilityClerk :: new)
