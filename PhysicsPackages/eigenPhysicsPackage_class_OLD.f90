@@ -64,7 +64,6 @@ module eigenPhysicsPackage_class
   use tallyAdmin_class,               only : tallyAdmin
   use tallyResult_class,              only : tallyResult
   use keffAnalogClerk_class,          only : keffResult
-  use simpleFMClerkExt_class,         only : FMeigen
 
   ! Factories
   use transportOperatorFactory_func,  only : new_transportOperator
@@ -107,7 +106,6 @@ module eigenPhysicsPackage_class
     real(defReal)      :: keff_0
     integer(shortInt)  :: bufferSize
     logical(defBool)   :: UFS = .false.
-    logical(defBool)   :: doFM = .true.
     logical(defBool)   :: reproducible = .true.
 
     ! Calculation components
@@ -170,21 +168,18 @@ contains
     integer(shortInt), intent(in)             :: N_cycles
     type(particleDungeon), save               :: buffer
     integer(shortInt)                         :: i, n, nStart, nEnd, nParticles
-    class(tallyResult),allocatable            :: res, resFM ! NEW
+    class(tallyResult),allocatable            :: res
     type(collisionOperator), save             :: collOp
     class(transportOperator),allocatable,save :: transOp
     type(RNG), target, save                   :: pRNG
     type(particle), save                      :: neutron
-    type(particleState), save                 :: neutState ! NEW
     real(defReal)                             :: k_old, k_new
-    real(defReal), dimension(:), allocatable  :: vec, vec0 ! NEW
     real(defReal)                             :: elapsed_T, end_T, T_toEnd
-    integer(shortInt), save                   :: idx ! NEW
 #ifdef MPI
     integer(shortInt)                         :: error, nTemp
 #endif
     character(100),parameter :: Here ='cycles (eigenPhysicsPackage_class.f90)'
-    !$omp threadprivate(neutron, buffer, collOp, transOp, pRNG, neutState)
+    !$omp threadprivate(neutron, buffer, collOp, transOp, pRNG)
 
     !$omp parallel
     ! Create particle buffer
@@ -268,58 +263,6 @@ contains
       if (self % UFS) then
         call self % ufsField % updateMap()
       end if
-
-
-      ! NEW: Get the FM eigenvector and use it to scale particle weights
-      if (self % doFM) then
-        ! Obtain estimate of k_eff
-        call tallyAtch % getResult(resFM,'fm')
-      
-        select type(resFM)
-          class is(FMeigen)
-            vec = resFM % eigVec
-            print *,'Scaling fission neutron weight'
-            ! Scale particle weights according to the eigenvector
-            ! First obtain the old fission weight distribution in the map
-            if (.not. allocated(vec0)) allocate(vec0(size(vec)))
-            vec0 = ZERO
-            !$omp parallel do
-            do n = 1, self % nextCycle % popSize()
-
-              call self % nextCycle % copy(neutron, n)
-              neutState = neutron
-              idx = self % fmMap % map(neutState)
-              if (idx > 0) then
-                !$omp atomic
-                vec0(idx) = vec0(idx) + neutState % wgt
-              end if
-
-            end do
-            !$omp end parallel do
-            vec0 = vec0 / sum(vec0)
-            print *,'Initial weight distribution:'
-            print *, vec0
-
-            !$omp parallel do
-            do n = 1, self % nextCycle % popSize()
-
-              ! Get the particle, map it, scale it
-              call self % nextCycle % copy(neutron, n)
-              neutState = neutron
-              idx = self % fmMap % map(neutState)
-              neutState % wgt = neutState % wgt * vec(idx) / vec0(idx) 
-              call self % nextCycle % replace(neutState, n)
-
-            end do
-            !$omp end parallel do
-
-          class default
-            call fatalError(Here, 'Invalid result has been returned')
-
-        end select
-      end if
-
-
 
       ! Normalise population
       if (self % reproducible) then

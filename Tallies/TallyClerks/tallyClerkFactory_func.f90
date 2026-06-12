@@ -11,7 +11,7 @@ module tallyClerkFactory_func
   use keffAnalogClerk_class,           only : keffAnalogClerk
   use keffImplicitClerk_class,         only : keffImplicitClerk
   use collisionClerk_class,            only : collisionClerk
-  use collisionClerkCycle_class,       only : collisionClerkCycle
+  use collisionClerkCycle_class,            only : collisionClerkCycle
   use collisionProbabilityClerk_class, only : collisionProbabilityClerk
   use trackClerk_class,                only : trackClerk
   use simpleFMClerk_class,             only : simpleFMClerk
@@ -39,6 +39,7 @@ module tallyClerkFactory_func
                                                                         'collisionProbabilityClerk',&
                                                                         'trackClerk               ',&
                                                                         'simpleFMClerk            ',&
+                                                                        'simpleFMClerkExt         ',&
                                                                         'shannonEntropyClerk      ',&
                                                                         'centreOfMassClerk        ',&
                                                                         'eventClerk               ',&
@@ -88,6 +89,9 @@ contains
 
      case('simpleFMClerk')
        allocate(simpleFMClerk :: new)
+
+     case('simpleFMClerkExt')
+       allocate(simpleFMClerkExt :: new)
 
      case('dancoffBellClerk')
        allocate(dancoffBellClerk :: new)
