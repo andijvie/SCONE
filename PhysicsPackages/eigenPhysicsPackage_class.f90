@@ -21,7 +21,7 @@ module eigenPhysicsPackage_class
                                              timerTime, timerReset, secToChar
 
   ! Particle classes and Random number generator
-  use particle_class,                 only : particle, P_NEUTRON
+  use particle_class,                 only : particle, P_NEUTRON, particleState ! NEW
   use particleDungeon_class,          only : particleDungeon
   use RNG_class,                      only : RNG
 
@@ -64,7 +64,9 @@ module eigenPhysicsPackage_class
   use tallyAdmin_class,               only : tallyAdmin
   use tallyResult_class,              only : tallyResult
   use keffAnalogClerk_class,          only : keffResult
-  use simpleFMClerkExt_class,         only : FMeigen
+  use simpleFMClerkExt_class,         only : FMresult ! NEW
+  use tallyMap_inter,                 only : tallyMap ! NEW
+  use tallyMapFactory_func,           only : new_tallyMap ! NEW
 
   ! Factories
   use transportOperatorFactory_func,  only : new_transportOperator
@@ -95,6 +97,10 @@ module eigenPhysicsPackage_class
     class(uniFissSitesField),pointer       :: ufsField      => null()
 
 
+    ! NEW: Used for binning particles to see their positions
+    class(tallyMap), allocatable           :: map
+
+
     ! Settings
     integer(shortInt)  :: N_inactive
     integer(shortInt)  :: N_active
@@ -107,8 +113,9 @@ module eigenPhysicsPackage_class
     real(defReal)      :: keff_0
     integer(shortInt)  :: bufferSize
     logical(defBool)   :: UFS = .false.
-    logical(defBool)   :: doFM = .true.
+    logical(defBool)   :: doFM = .false.
     logical(defBool)   :: reproducible = .true.
+    class(tallyMap), allocatable :: fmMap ! NEW
 
     ! Calculation components
     type(particleDungeon), pointer :: thisCycle    => null()
@@ -276,7 +283,7 @@ contains
         call tallyAtch % getResult(resFM,'fm')
       
         select type(resFM)
-          class is(FMeigen)
+          class is(FMresult)
             vec = resFM % eigVec
             print *,'Scaling fission neutron weight'
             ! Scale particle weights according to the eigenvector
@@ -669,6 +676,20 @@ contains
     call locDict1 % store('keff', locDict2)
     call locDict1 % store('display',['keff'])
     call locDict1 % store('mpiSync', 1)
+
+    ! NEW: Read fission matrix acceleration option
+    if (dict % isPresent('fm')) then
+
+      print *, "FM!"
+
+      self % doFM = .true.
+      tempDict => dict % getDictPtr('fm')
+      call locDict1 % store('fm', tempDict)
+      
+      ! Read map
+      call new_tallyMap(self % fmMap, tempDict % getDictPtr('map'))
+
+    end if
 
     allocate(self % inactiveAtch)
     call self % inactiveAtch % init(locDict1)
