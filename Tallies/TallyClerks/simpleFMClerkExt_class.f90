@@ -27,6 +27,8 @@ module simpleFMClerkExt_class
   ! Tally Response
   use macroResponse_class,        only : macroResponse
 
+  ! TODO: output final FM
+
   implicit none
   private
 
@@ -63,16 +65,24 @@ module simpleFMClerkExt_class
     !! Map defining the discretisation
     class(tallyMap), allocatable :: map
     type(macroResponse)          :: resp
-    integer(shortInt)            :: N = 0 !! Number of bins
+    integer(shortInt)            :: N = 0 ! Number of bins
+    integer(shortInt)            :: window ! NEW: No. of cycles to save
+    logical(defBool)             :: doDebug ! NEW: extra prints
+    logical(defBool)             :: forceOne ! NEW: forces a homogeneous eigenvector
 
     ! NEW: Fundamental eigenvector for scaling particles
-    real(defReal),dimension(:),allocatable   :: eigVec   
+    real(defReal),dimension(:),allocatable       :: eigVec   
 
-    ! NEW: Stores NOT-normalized FM
-    real(defReal), dimension(:,:), allocatable :: tallyMatrix
+    ! NEW: Stores NOT-normalized FM for multiple cycles
+    ! This is a queue (FiLo)
+    real(defReal), dimension(:,:,:), allocatable :: tallyMatrix
 
     ! NEW: Stores normalized FM
-    real(defReal), dimension(:,:), allocatable :: matrix
+    real(defReal), dimension(:,:), allocatable   :: matrix
+
+    ! NEW: Stores the cumilative number of neutrons in the starting bin for multiple cycles
+    ! This is a queue (FiLo)
+    real(defReal),dimension(:,:),allocatable     :: startWgt
 
     ! Settings
     logical(defBool) :: handleVirtual = .true.
@@ -148,21 +158,38 @@ contains
     ! Read size of the map
     self % N = self % map % bins(0)
 
+    ! NEW: read size of window
+    call dict % getOrDefault(self % window, 'window', 10)
+    print *, '<aqz22> [simpleFMClerkext] FM-window cycles set to:'
+    print *, self % window
+
     ! NEW: Allocate fundamental eigenvector for scaling particles
     allocate(self % eigVec(self % N))   
     self % eigVec = ONE
 
-    ! NEW: Allocate space and initialize the normalized and unnormalized matrix
-    allocate(self % tallyMatrix(self % N, self % N))
+    ! NEW: Allocate space and initialize the normalized/unnormalized matrix and startWgt
+    allocate(self % tallyMatrix(self % window, self % N, self % N))
     allocate(self % matrix(self % N, self % N))
+    allocate(self % startWgt(self % window, self % N))
     self % tallyMatrix = ZERO
     self % matrix = ZERO
+    self % startWgt = ZERO
 
     ! Initialise response
     call self % resp % build(macroNuFission)
 
     ! Handle virtual collisions
     call dict % getOrDefault(self % handleVirtual,'handleVirtual', .true.)
+
+    ! NEW: extra prints:
+    call dict % getOrDefault(self % doDebug, 'doDebug', .false.)
+    if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] DEBUG MESSAGES ENABLED' 
+  
+    ! NEW: force one:
+    call dict % getOrDefault(self % forceOne, 'forceOne', .false.)
+    if (self % forceOne) print *, '<aqz22> [simpleFMClerkext] FORCED HOMOGENEOUS EIGENVECTOR ENABLED' 
+
+  
 
   end subroutine init
 
@@ -200,12 +227,24 @@ contains
   !! See tallyClerk_inter for details
   !!
   subroutine reportCycleStart(self, start, mem)
-    class(simpleFMClerkExt), intent(inout) :: self
-    class(particleDungeon), intent(in)  :: start
-    type(scoreMemory), intent(inout)    :: mem
-    integer(shortInt)                   :: idx, i
+    class(simpleFMClerkExt), intent(inout)       :: self
+    class(particleDungeon), intent(in)           :: start
+    type(scoreMemory), intent(inout)             :: mem
+    integer(shortInt)                            :: idx, i
 
-    ! Loop through a population and calculate starting weight in each bin
+    if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] cycle start'
+
+    ! NEW: pop the first element of the queues and create new element for the next cycle (FiLo)
+    do i = 2, self % window
+      self % startWgt(i - 1, : ) = self % startWgt(i, : )
+      self % tallyMatrix(i - 1, : , : ) = self % tallyMatrix(i, : , : )
+    end do
+    
+    self % startWgt(self % window, : ) = ZERO
+    self % tallyMatrix(self % window, : , : ) = ZERO
+
+
+    ! NEW: Loop through a population, calculate starting weight in each bin, add to latest in moving window
     do i = 1, start % popSize()
 
       associate (state => start % get(i))
@@ -213,10 +252,20 @@ contains
         idx = self % map % map(state)
         if (idx == 0) cycle
         call mem % score(state % wgt, self % getMemAddress() + idx - 1)
-
+        self % startWgt(self % window, idx) = self % startWgt(self % window, idx) + state % wgt
       end associate
 
     end do
+
+    ! NEW: print if necessary
+    if (self % doDebug) then
+      print *, '<aqz22> [simpleFMClerkext] origin bin weights:'
+      do i = 1, self % window
+        print *, self % startWgt(i, :)
+      end do
+    end if
+
+
 
   end subroutine reportCycleStart
 
@@ -282,11 +331,8 @@ contains
     call mem % score(score, addr)
 
     ! NEW: Score to non-normalized matrix
-    self % tallyMatrix(cIdx, sIdx) = self % tallyMatrix(cIdx, sIdx) + score
+    self % tallyMatrix(self % window, cIdx, sIdx) = self % tallyMatrix(self % window, cIdx, sIdx) + score
     
-    if (cIdx /= sIdx) then
-      print *, 'cross'
-    end if
 
   end subroutine reportInColl
 
@@ -303,7 +349,11 @@ contains
     integer(longInt)                    :: addrFM
     real(defReal)                       :: normFactor
 
+
     if (mem % lastCycle()) then
+
+      if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] cycle end'
+
       ! Set address to the start of Fission Matrix
       ! Decrease by 1 to get correct address on the first iteration of the loop
       addrFM  = self % getMemAddress() + self % N - 1
@@ -323,24 +373,31 @@ contains
 
       end do
 
-    end if
 
-    ! New: normalize every cycle
-    do j = 1, self % N
-      ! Calculate normalisation factor
-      normFactor = mem % getScore(self % getMemAddress() + j - 1)
-      if (normFactor /= ZERO) normFactor = ONE / normFactor
-      
-      do i = 1, self % N
-        self % matrix(i,j) = self % tallyMatrix(i,j) * normFactor
+
+
+
+
+      ! New: normalize every cycle
+      if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] normalise FM factors:'
+
+      do j = 1, self % N
+        ! Calculate normalisation factor
+        normFactor = sum(self % startWgt( : , j))
+        if (normFactor /= ZERO) normFactor = ONE / normFactor
+        
+        if (self % doDebug) write(*,'(F18.15)', advance='no') normFactor
+        
+        do i = 1, self % N
+          self % matrix(i,j) = sum(self % tallyMatrix( : , i,j)) * normFactor
+        end do
       end do
-    end do
 
-    ! NEW: Obtain the fission matrix eigenvector
-    call self % solve(mem)
-    self % eigVec = self % eigVec / sum(self % eigVec)
-    print *,'Eigenvector'
-    print *, self % eigVec
+      if (self % doDebug) print *, ''
+
+      ! NEW: Obtain the fission matrix eigenvector
+      call self % solve(mem)
+    end if
 
   end subroutine closeCycle
 
@@ -351,14 +408,30 @@ contains
   !! by power iteration
   !!
   subroutine solve(self, mem)
-    class(simpleFMClerkExt), intent(inout) :: self
-    real(defReal), dimension(:), allocatable :: b
-    real(defReal)                            :: tol, err
-    integer(shortInt)                        :: it, i, j, itMax
-    type(scoreMemory), intent(inout)         :: mem ! NEW: memory
+    class(simpleFMClerkExt), intent(inout)       :: self
+    real(defReal), dimension(:), allocatable     :: b
+    real(defReal)                                :: tol, err
+    integer(shortInt)                            :: it, i, j, itMax
+    type(scoreMemory), intent(inout)             :: mem ! NEW: memory
+    real(defReal), dimension(:,:), allocatable   :: totMat ! NEW
+    
+    if (self % doDebug) then
+      
+      allocate(totMat(self % N, self % N))
+      do j = 1, self % N
+        do i = 1, self % N
+          totMat(i, j) = sum(self % tallyMatrix(:, i, j))
+        end do
+      end do
 
-    ! NEW: stores total weight
-    real(defReal)                            :: totWgt
+      print *, '<aqz22> [simpleFMClerkext] tally matrix:'
+      print *, totMat
+      print *, '<aqz22> [simpleFMClerkext] FM matrix:'
+      print *, self % matrix
+
+      print *, '<aqz22> [simpleFMClerkext] Start EV-solve...'
+    end if
+
 
     tol = 1.0E-7
     err = ONE
@@ -367,8 +440,6 @@ contains
     allocate(b(self % N))
     self % eigVec = ONE
 
-    print *, self % tallyMatrix
-    print *, self % matrix
 
     do it = 1, itMax 
 
@@ -391,18 +462,20 @@ contains
 
     end do
 
-    if (it >= itMax) print *,'FM iterations did not finish'
-    print *,'Iterations: '
-    print *, it
+    if (it >= itMax) print *,'WARNING: FM iterations did not finish <aqz22> [simpleFMClerkext]'
+  
+    self % eigVec = self % eigVec / sum(self % eigVec)
 
-    ! NEW: calculate total weight
-    totWgt = 0.0
-    do i = 1, self % N
-        totWgt = totWgt + mem % getScore(self % getMemAddress() + i - 1)
-    end do
+    if (self % doDebug) then
+      print *,'<aqz22> [simpleFMClerkext] EV finished. Iterations: '
+      print *, it
+    end if
 
-    ! NEW: multiply by that total weight
-    self % eigVec = self % eigVec * totWgt
+    if (self % forceOne) self % eigVec = ONE
+
+    print *,'FM Eigenvector:'
+    print *, self % eigVec
+
 
   end subroutine solve
 
@@ -601,6 +674,7 @@ contains
     ! NEW: deallocate matrices
     if (allocated(self % tallyMatrix)) deallocate(self % tallyMatrix)
     if (allocated(self % matrix)) deallocate(self % matrix)
+    if (allocated(self % startWgt)) deallocate(self % startWgt)
 
     self % N = 0
     self % handleVirtual = .true.

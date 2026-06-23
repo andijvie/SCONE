@@ -115,6 +115,8 @@ module eigenPhysicsPackage_class
     logical(defBool)   :: UFS = .false.
     logical(defBool)   :: doFM = .false.
     logical(defBool)   :: reproducible = .true.
+    logical(defBool)   :: isActive ! NEW
+    logical(defBool)   :: doDebug = .false. ! NEW
     class(tallyMap), allocatable :: fmMap ! NEW
 
     ! Calculation components
@@ -184,9 +186,10 @@ contains
     type(particle), save                      :: neutron
     type(particleState), save                 :: neutState ! NEW
     real(defReal)                             :: k_old, k_new
-    real(defReal), dimension(:), allocatable  :: vec, vec0 ! NEW
+    real(defReal), dimension(:), allocatable  :: vec, vec0, array ! NEW
     real(defReal)                             :: elapsed_T, end_T, T_toEnd
     integer(shortInt), save                   :: idx ! NEW
+    character(nameLen)                        :: filename ! NEW
 #ifdef MPI
     integer(shortInt)                         :: error, nTemp
 #endif
@@ -220,6 +223,39 @@ contains
 
       nParticles = self % thisCycle % popSize()
 
+      ! NEW: writes the neutron source to a file
+      if(allocated(self % map) .and. .not. self % isActive) then
+
+        filename = 'Sources/' // trim(self % outputFile) // '_source' // numToChar(i) // '.txt'
+        open(unit = 10, file = filename, status = 'unknown')
+
+        if (.not. allocated(array)) allocate(array(self % map % bins(0)))
+        array = ZERO
+
+        !$omp parallel do
+        do n = 1, self % thisCycle % popSize()
+
+          neutState = self % thisCycle % get(n)
+          idx = self % map % map(neutState)
+          if (idx > 0) then
+            !$omp atomic
+            array(idx) = array(idx) + neutState % wgt
+          end if
+
+        end do
+        !$omp end parallel do
+
+        do n = 1, self % map % bins(0)
+          write(10, *) array(n)
+        end do
+
+        ! Close the file
+        close(10)
+      end if
+
+
+
+      
       !$omp parallel do schedule(dynamic)
       gen: do n = 1, nParticles
 
@@ -268,6 +304,7 @@ contains
       ! Update RNG
       call self % pRNG % stride(self % totalPop + 1)
 
+
       ! Send end of cycle report
       nEnd = self % nextCycle % popSize()
       call tally % reportCycleEnd(self % nextCycle)
@@ -278,14 +315,16 @@ contains
 
 
       ! NEW: Get the FM eigenvector and use it to scale particle weights
-      if (self % doFM) then
+      if (self % doFM .and. .not. self % isActive) then
         ! Obtain estimate of k_eff
         call tallyAtch % getResult(resFM,'fm')
       
         select type(resFM)
           class is(FMresult)
             vec = resFM % eigVec
-            print *,'Scaling fission neutron weight'
+
+            if (self % doDebug) print *,'<aqz22> Scaling fission neutron weight'
+
             ! Scale particle weights according to the eigenvector
             ! First obtain the old fission weight distribution in the map
             if (.not. allocated(vec0)) allocate(vec0(size(vec)))
@@ -304,8 +343,13 @@ contains
             end do
             !$omp end parallel do
             vec0 = vec0 / sum(vec0)
-            print *,'Initial weight distribution:'
-            print *, vec0
+
+            if (self % doDebug) then
+              print *,'Initial weight distribution:'
+              print *, vec0
+              print *, 'Scalling by:'
+              print *, vec / vec0
+            end if
 
             !$omp parallel do
             do n = 1, self % nextCycle % popSize()
@@ -320,12 +364,13 @@ contains
             end do
             !$omp end parallel do
 
+            if (self % doDebug) print *,'<aqz22> Scalling finished'
+
           class default
             call fatalError(Here, 'Invalid result has been returned')
 
         end select
       end if
-
 
 
       ! Normalise population
@@ -343,6 +388,41 @@ contains
         call self % nextCycle % printToFile(trim(self % outputFile) // '_source' // numToChar(i) // &
                                             '_rank' // numToChar(getMPIRank()), self % printSource == BINARY_FILE)
       end if
+
+      ! NEW: print final fission source
+      ! TODO: make a function that does this
+      if (i == N_cycles .and. .not. self % isActive) then
+        self % isActive = .true.
+        if(allocated(self % map)) then
+
+          filename = 'Sources/' // trim(self % outputFile) // '_source' // numToChar(i + 1) // '.txt'
+          open(unit = 10, file = filename, status = 'unknown')
+
+          if (.not. allocated(array)) allocate(array(self % map % bins(0)))
+          array = ZERO
+
+          !$omp parallel do
+          do n = 1, self % nextCycle % popSize()
+
+            neutState = self % nextCycle % get(n)
+            idx = self % map % map(neutState)
+            if (idx > 0) then
+              !$omp atomic
+              array(idx) = array(idx) + neutState % wgt
+            end if
+
+          end do
+          !$omp end parallel do
+
+          do n = 1, self % map % bins(0)
+            write(10, *) array(n)
+          end do
+
+          ! Close the file
+          close(10)
+        end if
+      end if
+
 
       ! Flip cycle dungeons
       self % temp_dungeon => self % nextCycle
@@ -513,6 +593,9 @@ contains
     ! Parallel buffer size
     call dict % getOrDefault(self % bufferSize, 'buffer', 1000)
 
+    ! NEW: enable debug prints
+    call dict % getOrDefault(self % doDebug, 'doDebug', .false.)
+
     ! Process type of data
     select case(energy)
       case('mg')
@@ -541,7 +624,7 @@ contains
     !     so seeds are limited to 32 bits (can be -ve)
     if (dict % isPresent('seed')) then
       call dict % get(seed_temp,'seed')
-
+    
     else
       ! Obtain time string and hash it to obtain random seed
       call date_and_time(date, time)
@@ -565,6 +648,12 @@ contains
     call dict % getOrDefault(self % printSource, 'printSource', 0)
     if (self % printSource < NO_PRINTING .or. self % printSource > BINARY_FILE) then
       call fatalError(Here, 'printSource must be 0 (No printing), 1 (ASCII) or 2 (BINARY)')
+    end if
+
+    ! NEW: Read bins for FM output binning
+    if (dict % isPresent('particleBins')) then
+      tempDict => dict % getDictPtr('particleBins')
+      call new_tallyMap(self % map, tempDict)
     end if
 
     ! Build Nuclear Data
@@ -680,7 +769,7 @@ contains
     ! NEW: Read fission matrix acceleration option
     if (dict % isPresent('fm')) then
 
-      print *, "FM!"
+      print *, "FM acceleration is enabled!"
 
       self % doFM = .true.
       tempDict => dict % getDictPtr('fm')
@@ -716,6 +805,9 @@ contains
     ! Attach attachments to result tallies
     call self % inactiveTally % push(self % inactiveAtch)
     call self % activeTally % push(self % activeAtch)
+
+    ! Start w/ inactive cycles
+    self % isActive = .false.
 
 
     call self % printSettings()
