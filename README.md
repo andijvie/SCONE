@@ -1,3 +1,25 @@
+# SCONE FORK FOR ANDY QITIAN ZHANG MPHIL DISSERTATION: Fission Matrix Acceleration in Monte Carlo Simulations and Its Impact on Neutron Clustering
+This version is forked from the 6 May 2026 revision of the SCONE main branch, available at “CambridgeNuclear” on GitHub.
+
+## List of changes (exhaustive):
+ * FISSION MATRIX ACCELERATION: has been implemented for inactive and active cycles. The neutron weights are scaled to mach the fundamental EV of the FM. Tallies are implicit: based on the expected number of neutrons created from every collision.
+ * FISSION MATRIX ACCELERATION: can use cumulative tally (default) or set moving window size
+ * FISSION MATRIX ACCELERATION: setting to skip tallying for some initial number of cycles
+ * FISSION MATRIX ACCELERATION: can force the eigenvector to always be homogeneous (for testing)
+ * FISSION MATRIX ACCELERATION: has a setting for debug messages that show the calculations.
+ * FISSION MATRIX ACCELERATION: can set a minimum number of cycles tallied (in eigenphysics package)
+ * NEW TALLY CLERK: tallies fission matrix (need to enable as a setting)
+ * NEW TALLY CLERK: collisionClerkCycle prints the (cycle or cumulative) collision flux in every MC cycle.
+ * NEW EIGENPHYSICS SETTING: preserve total weight? (automatically enabled whith FM acceleration)
+ * NEW EIGENPHYSICS SETTING: use combing as normalisation method? (automatically enabled whith FM acceleration)
+ * NEW EIGENPHYSICS SETTING: print the FM EV of every cycle to a file?
+ * NEW EIGENPHYSICS SETTING: print the fission source to a file?
+ * NEW EIGENPHYSICS SETTING: show debug messages?
+ * The output file can now handle magnitudes E+-999
+ * Addition of 1D Fissile-Nonfissile-Fissile system stored as FNFslab (uses absorb_XSS and fissile_XSS)
+ * Addition of 1D homogeneous system stored as FNFslab (uses homg_XSS)
+
+
 # SCONE
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![build-and-test-ubuntu](https://github.com/CambridgeNuclear/SCONE/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/CambridgeNuclear/SCONE/actions/workflows/build-and-test.yml)
