@@ -1,30 +1,50 @@
+
 type eigenPhysicsPackage;
 
-pop      100000;
-active   1;
-inactive 1000;
+pop      1000;
+active   500;
+inactive 500;
 XSdata   mg;
 dataType mg;
 outputFormat asciiJSON;
-outputFile popRed;
+outputFile outputHomg;
+doDebug 0;
+N_skipFM 50;
+N_skipFMActive 20;
+combing 1;
+preserveWgt 1;
+
+fm {type simpleFMClerkExt;
+  map {type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 10; } doDebug 0; window 50; forceOne 0; skipCycles 0; printEV 1; }
+
+fmActive {type simpleFMClerkExt;
+  map {type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 10; } doDebug 0; window 0; forceOne 0; skipCycles 0; printEV 1; } 
+
+source { type pointSource; r (0.0 0.0 0.0); particle neutron; G 1; }
 
 collisionOperator { neutronMG {type neutronMGstd;}
                   }
 
 transportOperator { type transportOperatorDT;
                   }
+
+particleBins { type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 30; }
+
 inactiveTally {
                 shannon_entropy { type shannonEntropyClerk;
-                map { type spaceMap; axis x; grid lin; min -5.0; max 5.0; N 10;}
-                cycles 1000; }
+                  map { type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 100;}
+                  cycles 500; }
 		
-		flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
-                map { type spaceMap; axis x; grid lin; min -5.0; max 5.0; N 100; } cycles 1000; }
+		            flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
+                  map { type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 30; } cycles 500; cumulative 1; }
               }
 
+
+
 activeTally  {
-                
-        }
+                fmTally {type simpleFMClerkExt;
+                  map {type spaceMap; axis x; grid lin; min -100.0; max 100.0; N 10; } doDebug 0; window 0; forceOne 0; skipCycles 10; printEV 0; isTally 1; } 
+              }
 
 viz {
      plotFNF { type bmp; axis y; centre (0.0 0.0 0.0); res (200 200); output FNFgeom; }
@@ -37,7 +57,7 @@ geometry {
 
     surfaces
     {
-      homgBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (5.0 2.0 2.0); }
+      homgBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (100.0 2.0 2.0); }
     }
 
     cells

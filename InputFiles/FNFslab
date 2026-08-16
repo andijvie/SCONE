@@ -1,29 +1,55 @@
 type eigenPhysicsPackage;
 
-pop      2000;
-active   1;
-inactive 1000;
+pop      500;
+active   500;
+inactive 50;
 XSdata   mg;
 dataType mg;
 outputFormat asciiJSON;
-outputFile popRed;
+outputFile outputFNF;
+doDebug 0;
+N_skipFM 20;
+N_skipFMActive 20;
+combing 1;
+preserveWgt 1;
+
+    
+fm {type simpleFMClerkExt;
+  map {type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 2; } doDebug 1; window 20; forceOne 0; skipCycles 1; printEV 1; isTally 0; }
+
+fmActive {type simpleFMClerkExt;
+        map {type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 2; } doDebug 1; window 0; forceOne 0; skipCycles 0; printEV 1; isTally 0; }     
+
+source { type pointSource; r (-15.5 0.0 0.0); particle neutron; G 1; }
 
 collisionOperator { neutronMG {type neutronMGstd;}
                   }
 
 transportOperator { type transportOperatorDT;
                   }
+
+particleBins { type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 40; }
+
 inactiveTally {
                 shannon_entropy { type shannonEntropyClerk;
-                map { type spaceMap; axis x; grid lin; min -205.0; max 205.0; N 2;}
-                cycles 1000; }
+                  map { type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 2;}
+                  cycles 500; }
 		
-		flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
-                map { type spaceMap; axis x; grid lin; min -205.0; max 205.0; N 100; } cycles 1000; }
+	           	 flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
+                  map { type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 40; } cycles 500; }
               }
+              
 
 activeTally  {
-                
+	             	shannon_entropy { type shannonEntropyClerk;
+                  map { type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 2;}
+                  cycles 500; }
+	             	
+	             	flux { type collisionClerkCycle; response (flux_x); flux_x {type fluxResponse; } 
+                  map { type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 40; } cycles 500; }
+
+                fmTally {type simpleFMClerkExt;
+                  map {type spaceMap; axis x; grid lin; min -16.0; max 16.0; N 2; } doDebug 0; window 0; forceOne 0; skipCycles 10; printEV 0; isTally 1; } 
         }
 
 viz {
@@ -37,8 +63,8 @@ geometry {
 
     surfaces
     {
-      absorbBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (200.0 20.0 20.0); }
-      fissileBox { id 2; type box; origin ( 0.0  0.0  0.0); halfwidth (205.0 2.0 2.0); }
+      absorbBox { id 1; type box; origin ( 0.0  0.0  0.0); halfwidth (15.0 20.0 20.0); }
+      fissileBox { id 2; type box; origin ( 0.0  0.0  0.0); halfwidth (16.0 2.0 2.0); }
     }
 
 
