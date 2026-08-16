@@ -33,7 +33,7 @@ module simpleFMClerkExt_class
   private
 
   !!
-  !! Simple 1-D fission matrix
+  !! 1-D fission matrix for FM acceleration
   !!
   !! This is a prototype implementation
   !! Uses collision estimator only
@@ -49,15 +49,14 @@ module simpleFMClerkExt_class
   !!   resp     -> Response for transfer function (nuFission by default)
   !!   startWgt -> Starting Weigths in each bin
   !!   N        -> Number of Bins
-  !!
-  !! Interface:
-  !!   tallyClerk Interface
+  ! TODO: add to this
   !!
   !! Sample dictionary input:
   !!
   !!  clerkName {
-  !!      type simpleFMClerk;
+  !!      type simpleFMClerkExt;
   !!      map { <TallyMapDef> }
+  ! TODO: add to this
   !!  }
   !!
   type, public, extends(tallyClerk) :: simpleFMClerkExt
@@ -67,8 +66,11 @@ module simpleFMClerkExt_class
     type(macroResponse)          :: resp
     integer(shortInt)            :: N = 0 ! Number of bins
     integer(shortInt)            :: window ! NEW: No. of cycles to save
+    integer(shortInt)            :: thisCycle, firstCycle ! NEW: No. of cycles to skip
     logical(defBool)             :: doDebug ! NEW: extra prints
+    logical(defBool)             :: isTally ! NEW: Only tally no FM acceleration
     logical(defBool)             :: forceOne ! NEW: forces a homogeneous eigenvector
+    logical(defBool)             :: disableWindow ! NEW: disables moving window
 
     ! NEW: Fundamental eigenvector for scaling particles
     real(defReal),dimension(:),allocatable       :: eigVec   
@@ -124,19 +126,6 @@ module simpleFMClerkExt_class
     real(defReal), dimension(:),allocatable :: eigVec ! FM eigenvector
   end type FMResult
 
-
-  !!
-  !!  NAMECHANGE: Fission matrix result class
-  !!   Stored in column first order
-  !!    dim1 -> target bin
-  !!    dim2 -> orgin bin
-  !!    dim3 -> 1 is values; 2 is STDs
-  !!
-  type,public, extends( tallyResult) :: FMmatrix
-    integer(shortInt)                            :: N  = 0 ! Size of FM
-    real(defReal), dimension(:,:,:), allocatable :: FM     ! FM proper
-  end type FMmatrix
-
 contains
 
   !!
@@ -159,9 +148,29 @@ contains
     self % N = self % map % bins(0)
 
     ! NEW: read size of window
-    call dict % getOrDefault(self % window, 'window', 10)
-    print *, '<aqz22> [simpleFMClerkext] FM-window cycles set to:'
-    print *, self % window
+    call dict % getOrDefault(self % window, 'window', 0)
+    if (self % window == 0) then
+      print *, '<aqz22> [simpleFMClerkext] FM moving-window is DISABLED'
+      self % disableWindow = .true.
+      self % window = 1
+    else
+      print *, '<aqz22> [simpleFMClerkext] FM-window cycles set to:'
+      print *, self % window
+      self % disableWindow = .false.
+    end if
+
+    ! NEW: read first cycle
+    call dict % getOrDefault(self % firstCycle, 'skipCycles', 0)
+    print *, '<aqz22> [simpleFMClerkext] Number of cycles to skip:'
+    print *, self % firstCycle
+    self % thisCycle = 0
+
+    ! NEW: check if tally:
+    call dict % getOrDefault(self % isTally, 'isTally', .false.)
+    if (self % isTally) then
+      print *, '<aqz22> [simpleFMClerkext] FM CLERK IS TALLY'
+      self % window = 1 
+    end if  
 
     ! NEW: Allocate fundamental eigenvector for scaling particles
     allocate(self % eigVec(self % N))   
@@ -188,6 +197,7 @@ contains
     ! NEW: force one:
     call dict % getOrDefault(self % forceOne, 'forceOne', .false.)
     if (self % forceOne) print *, '<aqz22> [simpleFMClerkext] FORCED HOMOGENEOUS EIGENVECTOR ENABLED' 
+
 
   
 
@@ -232,18 +242,24 @@ contains
     type(scoreMemory), intent(inout)             :: mem
     integer(shortInt)                            :: idx, i
 
+    self % thisCycle = self % thisCycle + 1
+
     if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] cycle start'
 
-    ! NEW: pop the first element of the queues and create new element for the next cycle (FiLo)
-    do i = 2, self % window
-      self % startWgt(i - 1, : ) = self % startWgt(i, : )
-      self % tallyMatrix(i - 1, : , : ) = self % tallyMatrix(i, : , : )
-    end do
+    if (.not. self % disableWindow) then
+
+      ! NEW: pop the first element of the queues and create new element for the next cycle (FiLo)
+      do i = 2, self % window
+        self % startWgt(i - 1, : ) = self % startWgt(i, : )
+        self % tallyMatrix(i - 1, : , : ) = self % tallyMatrix(i, : , : )
+      end do
+      
+      self % startWgt(self % window, : ) = ZERO
+      self % tallyMatrix(self % window, : , : ) = ZERO
+
+    end if
+
     
-    self % startWgt(self % window, : ) = ZERO
-    self % tallyMatrix(self % window, : , : ) = ZERO
-
-
     ! NEW: Loop through a population, calculate starting weight in each bin, add to latest in moving window
     do i = 1, start % popSize()
 
@@ -331,7 +347,7 @@ contains
     call mem % score(score, addr)
 
     ! NEW: Score to non-normalized matrix
-    self % tallyMatrix(self % window, cIdx, sIdx) = self % tallyMatrix(self % window, cIdx, sIdx) + score
+    if (.not. self % isTally) self % tallyMatrix(self % window, cIdx, sIdx) = self % tallyMatrix(self % window, cIdx, sIdx) + score
     
 
   end subroutine reportInColl
@@ -373,30 +389,36 @@ contains
 
       end do
 
+      if (.not. self % isTally) then
 
-
-
-
-
-      ! New: normalize every cycle
-      if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] normalise FM factors:'
-
-      do j = 1, self % N
-        ! Calculate normalisation factor
-        normFactor = sum(self % startWgt( : , j))
-        if (normFactor /= ZERO) normFactor = ONE / normFactor
+            if (self % thisCycle <= self % firstCycle) then
+              print *, '<aqz22> [simpleFMClerkext] FM tally disabled'
+              self % eigVec = ZERO
+              self % startWgt(self % window, : ) = ZERO
+              self % tallyMatrix(self % window, : , : ) = ZERO
+              return
+            end if
         
-        if (self % doDebug) write(*,'(F18.15)', advance='no') normFactor
-        
-        do i = 1, self % N
-          self % matrix(i,j) = sum(self % tallyMatrix( : , i,j)) * normFactor
+        ! New: normalize moving average FM
+        if (self % doDebug) print *, '<aqz22> [simpleFMClerkext] normalise FM factors:'
+
+        do j = 1, self % N
+          ! Calculate normalisation factor
+          normFactor = sum(self % startWgt( : , j))
+          if (normFactor /= ZERO) normFactor = ONE / normFactor
+          
+          if (self % doDebug) write(*,'(F18.15)', advance='no') normFactor
+          
+          do i = 1, self % N
+            self % matrix(i,j) = sum(self % tallyMatrix( : , i,j)) * normFactor
+          end do
         end do
-      end do
 
-      if (self % doDebug) print *, ''
+        if (self % doDebug) print *, ''
 
-      ! NEW: Obtain the fission matrix eigenvector
-      call self % solve(mem)
+        ! NEW: Obtain the fission matrix eigenvector
+        call self % solve(mem)
+      end if
     end if
 
   end subroutine closeCycle
@@ -497,62 +519,10 @@ contains
     integer(longInt)                               :: addr
     real(defReal)                                  :: val, STD
 
-    !! Allocate result to FMmatrix
-    !! Do not deallocate if already allocated to FMmatrix
-    !! Its not to nice -> clean up
-    !if (allocated(res)) then
-!
-    !  select type(res)
-    !    class is (FMmatrix)
-    !      ! Do nothing
-    !    class default
-    !      ! Reallocate
-    !      deallocate(res)
-    !      allocate( FMmatrix :: res)
-    !  end select
-!
-    !else
-    !  allocate( FMmatrix :: res)
-!
-    !end if
-!
-    !! Load data into the FM
-    !select type(res)
-    !  class is(FMmatrix)
-    !    ! Check size and reallocate space if needed
-    !    ! This is horrible. Hove no time to polish. Blame me (MAK)
-    !    if (allocated(res % FM)) then
-!
-    !      if (any(shape(res % FM) /= [self % N, self % N, 2])) then
-    !        deallocate(res % FM)
-    !        allocate(res % FM(self % N, self % N, 2))
-    !      end if
-!
-    !    else
-    !      allocate(res % FM(self % N, self % N, 2))
-    !    end if
-!
-    !    ! Set size of the FM
-    !    res % N = self % N
-!
-    !    ! Load entries
-    !    addr = self % getMemAddress() + self % N - 1
-    !    do i = 1, self % N
-    !      do j = 1, self % N
-    !        addr = addr + 1
-    !        call mem % getResult(val, STD, addr)
-    !        res % FM(j, i, 1) = val
-    !        res % FM(j, i, 2) = STD
-    !      end do
-    !    end do
-!
-    !end select
-!
 
-
-    !! NEW: also return the resulting FM-ev
-        ! Allocate result to FMeigen
-    ! Do not deallocate if already allocated to FMeigen
+    !! NEW: return the resulting FM-ev
+    ! Allocate result to FMresult
+    ! Do not deallocate if already allocated to FMresult
     ! Its not to nice -> clean up
     if (allocated(res)) then
       select type(res)
@@ -677,6 +647,7 @@ contains
     if (allocated(self % startWgt)) deallocate(self % startWgt)
 
     self % N = 0
+    self % thisCycle = 0
     self % handleVirtual = .true.
 
     call self % resp % kill()

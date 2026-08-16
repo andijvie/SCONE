@@ -71,6 +71,12 @@ module collisionClerkCycle_class
     ! NEW: the memory size of one cycle
     integer(longInt)   :: cycleSize = 0
 
+    ! NEW: if the tally is of the cumilative estimation
+    logical(defBool)   :: isCumulative = .false.
+
+    ! NEW: store cumulative scores between cycles
+    real(defReal), dimension(:), allocatable :: carryScores
+
     ! Useful data
     integer(shortInt)  :: width = 0
 
@@ -86,6 +92,9 @@ module collisionClerkCycle_class
 
     ! NEW: File reports and check status -> run-time procedures
     procedure  :: reportCycleEnd
+
+    ! NEW: Carry scores from previous cycles
+    procedure :: reportCycleStart
 
     ! File reports and check status -> run-time procedures
     procedure  :: reportInColl
@@ -138,9 +147,18 @@ contains
     ! Set width
     self % width = size(responseNames)
 
+    ! NEW: check if cumulative
+    call dict % getOrDefault(self % isCumulative,'cumulative', .false.)
+
     ! NEW: store size of one cycle
     self % cycleSize = size(self % response)
     if(allocated(self % map)) self % cycleSize = self % cycleSize * self % map % bins(0) 
+
+    ! NEW: Store scores between consecutive cycles
+    if (self % isCumulative) then
+      allocate(self % carryScores(self % cycleSize))
+      self % carryScores = ZERO
+    end if
 
     ! Handle virtual collisions
     call dict % getOrDefault(self % handleVirtual,'handleVirtual', .true.)
@@ -179,6 +197,7 @@ contains
     self % currentCycle = 0
     self % maxCycles = 1
     self % cycleSize = 0
+    self % isCumulative = .false.
 
   end subroutine kill
 
@@ -191,8 +210,8 @@ contains
     class(collisionClerkCycle),intent(in)           :: self
     integer(shortInt),dimension(:),allocatable :: validCodes
 
-    ! NEW: can also return the cycle
-    validCodes = [inColl_CODE, cycleEnd_CODE]
+    ! NEW: additional codes
+    validCodes = [inColl_CODE, cycleEnd_CODE, cycleStart_CODE]
 
   end function validReports
 
@@ -276,14 +295,48 @@ contains
 
   end subroutine reportInColl
 
+  !!
+  !! NEW: retrieve scores at cycles at cycle start
+  !!
+  subroutine reportCycleStart(self, start, mem)
+    class(collisionClerkCycle), intent(inout) :: self
+    class(particleDungeon), intent(in)        :: start
+    type(scoreMemory), intent(inout)          :: mem
+    integer(longInt)                          :: addr
+
+    if (.not. self % isCumulative) return
+    if (self % currentCycle == 0) return
+    if (self % currentCycle >= self % maxCycles) return
+
+    addr = self % getMemAddress() + &
+          self % currentCycle * self % cycleSize
+
+    ! Start this cycle with the previous cycle's tally
+    mem % parallelBins(addr:addr + self % cycleSize - 1, 1) = &
+        self % carryScores
+
+  end subroutine reportCycleStart
+
 
   !!
-  !! NEW: reportCycleEnd, increments the cycle number
+  !! NEW: reportCycleEnd, increments the cycle number, carries scores to next cycles
   !!
   subroutine reportCycleEnd(self, end, mem)
     class(collisionClerkCycle), intent(inout) :: self
     class(particleDungeon), intent(in)        :: end
     type(scoreMemory), intent(inout)          :: mem
+    integer(longInt)                          :: addr
+
+    if (self % isCumulative .and. &
+      self % currentCycle < self % maxCycles - 1) then
+
+    addr = self % getMemAddress() + &
+           self % currentCycle * self % cycleSize
+
+    self % carryScores = sum( &
+        mem % parallelBins(addr:addr + self % cycleSize - 1, :), dim=2)
+
+  end if
 
     self % currentCycle = self % currentCycle + 1
 

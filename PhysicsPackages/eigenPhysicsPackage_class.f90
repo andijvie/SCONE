@@ -114,10 +114,16 @@ module eigenPhysicsPackage_class
     integer(shortInt)  :: bufferSize
     logical(defBool)   :: UFS = .false.
     logical(defBool)   :: doFM = .false.
+    logical(defBool)   :: doFMActive = .false.
+    logical(defBool)   :: doPrintEV = .false.
+    logical(defBool)   :: doPrintEVActive = .false.
     logical(defBool)   :: reproducible = .true.
     logical(defBool)   :: isActive ! NEW
     logical(defBool)   :: doDebug = .false. ! NEW
-    class(tallyMap), allocatable :: fmMap ! NEW
+    class(tallyMap), allocatable :: fmMap, fmActiveMap ! NEW
+    integer(shortInt)  :: N_skipFM, N_skipFMActive ! NEW
+    logical(defBool)   :: doPrsvWgt ! NEW
+    logical(defBool)   :: doComb ! NEW
 
     ! Calculation components
     type(particleDungeon), pointer :: thisCycle    => null()
@@ -134,6 +140,7 @@ module eigenPhysicsPackage_class
     procedure :: init
     procedure :: printSettings
     procedure :: cycles
+    procedure :: writeSource ! NEW
     procedure :: generateInitialState
     procedure :: collectResults
     procedure :: run
@@ -155,6 +162,7 @@ contains
     call self % generateInitialState()
 
     call self % cycles(self % inactiveTally, self % inactiveAtch, self % N_inactive)
+    self % isActive = .true.
     call self % cycles(self % activeTally, self % activeAtch, self % N_active)
 
     ! Collect results from other processes
@@ -166,6 +174,48 @@ contains
     call statusMsg("")
     call printSectionEnd("END OF EIGENVALUE CALCULATION")
     call statusMsg("")
+
+  end subroutine
+
+  ! NEW: writes the neutron source "cyclePrint" to a file for that "cycle"
+  subroutine writeSource(self, cyclePrint, cycle)
+    class(eigenPhysicsPackage), intent(in)     :: self
+    type(particleDungeon), pointer, intent(in) :: cyclePrint 
+    integer(shortInt), intent(in)              :: cycle
+    type(particleState), save                  :: neutState
+    real(defReal), dimension(:), allocatable   :: array
+    character(nameLen)                         :: filename 
+    integer(shortInt)                          :: n, idx 
+
+    !$omp threadprivate(neutState)
+
+  
+    filename = 'Sources/' // trim(self % outputFile) // '_source' // numToChar(cycle) // '.txt'
+    if (self % isActive) filename = 'Sources/' // trim(self % outputFile) // '_sourceA' // numToChar(cycle) // '.txt'
+    open(unit = 10, file = filename, status = 'unknown')
+
+    if (.not. allocated(array)) allocate(array(self % map % bins(0)))
+    array = ZERO
+
+    !$omp parallel do
+    do n = 1, cyclePrint % popSize()
+
+      neutState = cyclePrint % get(n)
+      idx = self % map % map(neutState)
+      if (idx > 0) then
+        !$omp atomic
+        array(idx) = array(idx) + neutState % wgt
+      end if
+
+    end do
+    !$omp end parallel do
+
+    do n = 1, self % map % bins(0)
+      write(10, *) array(n)
+    end do
+
+    ! Close the file
+    close(10)
 
   end subroutine
 
@@ -186,15 +236,15 @@ contains
     type(particle), save                      :: neutron
     type(particleState), save                 :: neutState ! NEW
     real(defReal)                             :: k_old, k_new
-    real(defReal), dimension(:), allocatable  :: vec, vec0, array ! NEW
+    real(defReal), dimension(:), allocatable  :: vec, vec0 ! NEW
     real(defReal)                             :: elapsed_T, end_T, T_toEnd
     integer(shortInt), save                   :: idx ! NEW
-    character(nameLen)                        :: filename ! NEW
+    character(nameLen)                        :: filename ! NEW 
 #ifdef MPI
     integer(shortInt)                         :: error, nTemp
 #endif
     character(100),parameter :: Here ='cycles (eigenPhysicsPackage_class.f90)'
-    !$omp threadprivate(neutron, buffer, collOp, transOp, pRNG, neutState)
+    !$omp threadprivate(neutron, buffer, collOp, transOp, pRNG, neutState, idx)
 
     !$omp parallel
     ! Create particle buffer
@@ -222,38 +272,11 @@ contains
       call tally % reportCycleStart(self % thisCycle)
 
       nParticles = self % thisCycle % popSize()
+      
 
-      ! NEW: writes the neutron source to a file
-      if(allocated(self % map) .and. .not. self % isActive) then
-
-        filename = 'Sources/' // trim(self % outputFile) // '_source' // numToChar(i) // '.txt'
-        open(unit = 10, file = filename, status = 'unknown')
-
-        if (.not. allocated(array)) allocate(array(self % map % bins(0)))
-        array = ZERO
-
-        !$omp parallel do
-        do n = 1, self % thisCycle % popSize()
-
-          neutState = self % thisCycle % get(n)
-          idx = self % map % map(neutState)
-          if (idx > 0) then
-            !$omp atomic
-            array(idx) = array(idx) + neutState % wgt
-          end if
-
-        end do
-        !$omp end parallel do
-
-        do n = 1, self % map % bins(0)
-          write(10, *) array(n)
-        end do
-
-        ! Close the file
-        close(10)
+      if(allocated(self % map)) then
+        call self % writeSource(self % thisCycle, i)
       end if
-
-
 
       
       !$omp parallel do schedule(dynamic)
@@ -313,15 +336,31 @@ contains
         call self % ufsField % updateMap()
       end if
 
-
       ! NEW: Get the FM eigenvector and use it to scale particle weights
-      if (self % doFM .and. .not. self % isActive) then
+      if ((.not. self % isActive .and. i <= self % N_skipFM) .or. (self % isActive .and. i <= self % N_skipFMActive)) then
+        if (self % doDebug .and. self % doFM .and. .not. self % isActive) print *, '<aqz22> Skip FM'
+      else if ((self % doFM .and. .not. self % isActive) .or. (self % doFMActive .and. self % isActive)) then
+        
         ! Obtain estimate of k_eff
-        call tallyAtch % getResult(resFM,'fm')
-      
+        if (.not. self % isActive) then
+          call tallyAtch % getResult(resFM,'fm')
+        else
+          call tallyAtch % getResult(resFM,'fmActive')
+        end if
+
         select type(resFM)
           class is(FMresult)
             vec = resFM % eigVec
+
+            if ((self % doPrintEV .and. .not. self % isActive) .or. (self % doPrintEVActive .and. self % isActive)) then
+                  filename = 'EVs/' // trim(self % outputFile) // '_ev' // numToChar(i) // '.txt'
+                  if (self % isActive) filename = 'EVs/' // trim(self % outputFile) // '_evA' // numToChar(i) // '.txt'
+                  open(unit = 10, file = filename, status = 'unknown')
+                  do n = 1, size(vec)
+                    write(10, *) vec(n)
+                  end do
+                  close(10)
+            end if
 
             if (self % doDebug) print *,'<aqz22> Scaling fission neutron weight'
 
@@ -334,7 +373,13 @@ contains
 
               call self % nextCycle % copy(neutron, n)
               neutState = neutron
-              idx = self % fmMap % map(neutState)
+
+              if (.not. self % isActive) then
+                idx = self % fmMap % map(neutState)
+              else
+                idx = self % fmActiveMap % map(neutState)
+              end if
+
               if (idx > 0) then
                 !$omp atomic
                 vec0(idx) = vec0(idx) + neutState % wgt
@@ -357,7 +402,13 @@ contains
               ! Get the particle, map it, scale it
               call self % nextCycle % copy(neutron, n)
               neutState = neutron
-              idx = self % fmMap % map(neutState)
+              
+              if (.not. self % isActive) then
+                idx = self % fmMap % map(neutState)
+              else
+                idx = self % fmActiveMap % map(neutState)
+              end if
+
               neutState % wgt = neutState % wgt * vec(idx) / vec0(idx) 
               call self % nextCycle % replace(neutState, n)
 
@@ -372,12 +423,22 @@ contains
         end select
       end if
 
-
       ! Normalise population
-      if (self % reproducible) then
+      ! NEW: combing
+      if (self % doComb) then
+        if (self % reproducible) call fatalError(Here, '<aqz22> Combing w/ MPI-invariant reproducibility hasnt been implemented')
+
+        call self % nextCycle % combing(self % pop, self % pRNG)
+      else if (self % reproducible) then
         call self % nextCycle % normSize_Repr(self % totalPop, self % pRNG)
       else
         call self % nextCycle % normSize_notRepr(self % pop, self % pRNG)
+      end if
+
+      ! NEW: preserve weight if necessary
+      if (self % doPrsvWgt) then
+        if (self % doDebug) print *, '<aqz22> Preserving weight...'
+        call self % nextCycle % normWeight(real(self % pop,defReal))
       end if
 
       ! Update RNG after it was used to normalise particle population
@@ -389,38 +450,10 @@ contains
                                             '_rank' // numToChar(getMPIRank()), self % printSource == BINARY_FILE)
       end if
 
+
       ! NEW: print final fission source
-      ! TODO: make a function that does this
-      if (i == N_cycles .and. .not. self % isActive) then
-        self % isActive = .true.
-        if(allocated(self % map)) then
-
-          filename = 'Sources/' // trim(self % outputFile) // '_source' // numToChar(i + 1) // '.txt'
-          open(unit = 10, file = filename, status = 'unknown')
-
-          if (.not. allocated(array)) allocate(array(self % map % bins(0)))
-          array = ZERO
-
-          !$omp parallel do
-          do n = 1, self % nextCycle % popSize()
-
-            neutState = self % nextCycle % get(n)
-            idx = self % map % map(neutState)
-            if (idx > 0) then
-              !$omp atomic
-              array(idx) = array(idx) + neutState % wgt
-            end if
-
-          end do
-          !$omp end parallel do
-
-          do n = 1, self % map % bins(0)
-            write(10, *) array(n)
-          end do
-
-          ! Close the file
-          close(10)
-        end if
+      if (i == N_cycles .and. allocated(self % map)) then
+        call self % writeSource(self % nextCycle, i)
       end if
 
 
@@ -588,13 +621,24 @@ contains
     call dict % get( energy, 'dataType')
 
     ! Check if the calculation has to be reproducible with MPI
-    call dict % getOrDefault(self % reproducible, 'reproducible', .true.)
+    ! NEW: off by default
+    call dict % getOrDefault(self % reproducible, 'reproducible', .false.)
 
     ! Parallel buffer size
     call dict % getOrDefault(self % bufferSize, 'buffer', 1000)
 
     ! NEW: enable debug prints
     call dict % getOrDefault(self % doDebug, 'doDebug', .false.)
+
+    ! NEW: skip FM
+    call dict % getOrDefault(self % N_skipFM, 'N_skipFM', 1)
+    call dict % getOrDefault(self % N_skipFMActive, 'N_skipFMActive', 1)
+
+    ! NEW: preseve weight?
+    call dict % getOrDefault(self % doPrsvWgt, 'preserveWgt', .false.)
+
+    ! NEW: comb?
+    call dict % getOrDefault(self % doComb, 'combing', .false.)
 
     ! Process type of data
     select case(energy)
@@ -772,13 +816,21 @@ contains
       print *, "FM acceleration is enabled!"
 
       self % doFM = .true.
+      self % doPrsvWgt = .true.
+      self % doComb = .true.
       tempDict => dict % getDictPtr('fm')
       call locDict1 % store('fm', tempDict)
       
       ! Read map
       call new_tallyMap(self % fmMap, tempDict % getDictPtr('map'))
+      call tempDict % getOrDefault(self % doPrintEV, 'printEV', .false.)
+
+      if (self % doPrintEV) print *, "<aqz22> FM eigenvalue printing is enabled"
 
     end if
+
+
+
 
     allocate(self % inactiveAtch)
     call self % inactiveAtch % init(locDict1)
@@ -795,6 +847,27 @@ contains
     call locDict1 % store('keff', locDict2)
     call locDict1 % store('display',['keff'])
     call locDict1 % store('mpiSync', 1)
+
+
+        ! NEW: Read fission matrix acceleration option
+    if (dict % isPresent('fmActive')) then
+
+      print *, "FM acceleration is for active generations is enabled!"
+
+      self % doFMActive = .true.
+      self % doPrsvWgt = .true.
+      self % doComb = .true.
+      tempDict => dict % getDictPtr('fmActive')
+      call locDict1 % store('fmActive', tempDict)
+      
+      ! Read map
+      call new_tallyMap(self % fmActiveMap, tempDict % getDictPtr('map'))
+      call tempDict % getOrDefault(self % doPrintEVActive, 'printEV', .false.)
+
+      if (self % doPrintEVActive) print *, "<aqz22> FM eigenvalue printing is enabled for active generations"
+
+    end if
+    
 
     allocate(self % activeAtch)
     call self % activeAtch % init(locDict1)
