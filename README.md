@@ -1,5 +1,6 @@
 # SCONE FORK FOR ANDY QITIAN ZHANG MPHIL DISSERTATION: Fission Matrix Acceleration in Monte Carlo Simulations and Its Impact on Neutron Clustering
 This version is forked from the 6 May 2026 revision of the SCONE main branch, available at “CambridgeNuclear” on GitHub.
+Examples of how to use the new FM acceleration feature are shown in the homg and FNFslab input files.
 
 ## List of changes (exhaustive):
  * FISSION MATRIX ACCELERATION: has been implemented for inactive and active cycles. The neutron weights are scaled to mach the fundamental EV of the FM. Tallies are implicit: based on the expected number of neutrons created from every collision.
